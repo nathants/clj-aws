@@ -6,13 +6,14 @@
 
 (defn -cache-path
   [& args]
-  (str "/tmp/s3cache" (bt/hash (apply str args))))
+  (doto (str (System/getProperty "user.home") "/tmp/s3cache" (bt/hash (apply str args)))
+    (-> java.io.File. .getParentFile .mkdirs)))
 
-(defn -cached-lookup-key
+(defn -cached-get-key-stream
   [lookup-key]
   (fn [creds bucket key]
     (let [path (-cache-path bucket key)]
-      (if-not (-> path java.io.File. .exists)
+      (when-not (-> path java.io.File. .exists)
         (with-open [stream (lookup-key creds bucket key)
                     reader (io/reader stream)]
           (->> reader line-seq (s/join "\n") (spit path))))
@@ -20,11 +21,15 @@
 
 (defn -cached-list-keys
   [list-keys]
-  (fn [creds bucket prefix & [marker]]
-    (let [path (-cache-path bucket prefix)]
-      (when-not (-> path java.io.File. .exists)
-        (spit path (s/join "\n" (list-keys creds bucket prefix marker))))
-      (-> path slurp (s/split #"\n")))))
+  (fn f
+    ([creds bucket prefix] (f creds bucket prefix [:key] nil))
+    ([creds bucket prefix keys & [marker]]
+     (let [path (-cache-path bucket prefix)]
+       (when-not (-> path java.io.File. .exists)
+         ;; todo this is eagerly reading all keys.
+         ;; we should wrap the lazy seq and only cache the keys the caller actually consumes.
+         (spit path (s/join "\n" (list-keys creds bucket prefix keys marker))))
+       (-> path slurp (s/split #"\n"))))))
 
 (defn -prefixes
   [key]
@@ -87,12 +92,16 @@
      nil)))
 
 (defn list-keys
-  [creds bucket prefix & [marker]]
-  (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker)]
-    (lazy-cat
-     (map :key (:object-summaries resp))
-     (if (:truncated? resp)
-       (list-keys creds bucket prefix (:next-marker resp))))))
+  ([creds bucket prefix] (list-keys creds bucket prefix [:key] nil))
+  ([creds bucket prefix keys & [marker]]
+   (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker)]
+     (lazy-cat
+      (map (if (-> keys count (> 1))
+             #(select-keys % keys)
+             (first keys))
+           (:object-summaries resp))
+      (if (:truncated? resp)
+        (list-keys creds bucket prefix keys (:next-marker resp)))))))
 
 (defn get-key-stream
   [creds bucket key]
@@ -110,13 +119,14 @@
 (defmacro with-cached-s3
   [& forms]
   `(with-redefs [list-keys (-cached-list-keys list-keys)
-                 get-key-stream (-cached-lookup-key get-key-stream)]
+                 get-key-stream (-cached-get-key-stream get-key-stream)]
      ~@forms))
 
 (defmacro with-stubbed-s3
   [data & forms]
-  `(let [paths# (-stub-s3 ~data)]
-     (with-cached-s3
-       ~@forms)
+  `(let [paths# (-stub-s3 ~data)
+         res# (with-cached-s3
+                ~@forms)]
      (doseq [path# paths#]
-       (-> path# java.io.File. .delete))))
+       (-> path# java.io.File. .delete))
+     res#))
