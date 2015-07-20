@@ -4,10 +4,14 @@
             [clojure.java.io :as io]
             [clojure.string :as s]))
 
+(def -get-root-path
+  (memoize
+   #(doto (str (System/getProperty "user.home") "/tmp/s3cache")
+      (-> java.io.File. .getParentFile .mkdirs))))
+
 (defn -cache-path
   [& args]
-  (doto (str (System/getProperty "user.home") "/tmp/s3cache" (bt/hash (apply str args)))
-    (-> java.io.File. .getParentFile .mkdirs)))
+  (str (-get-root-path) (bt/hash (apply str args))))
 
 (defn -cached-get-key-stream
   [lookup-key]
