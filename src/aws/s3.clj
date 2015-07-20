@@ -115,10 +115,25 @@
   [creds bucket key]
   (slurp (get-key-stream creds bucket key)))
 
-(defn download-key
-  [creds bucket key file-path]
+(defn get-key-path
+  [creds bucket key path]
   (-> (get-key-stream creds bucket key)
-      (io/copy (io/file file-path))))
+      (io/copy (io/file path))))
+
+(defn put-key-text
+  [creds bucket key text]
+  (let [bytes (.getBytes text "UTF-8")
+        stream (java.io.ByteArrayInputStream. bytes)
+        metadata {:content-length (count bytes)}]
+    (amz.s3/put-object creds :bucket-name bucket :key key :input-stream stream :metadata metadata)))
+
+(defn put-key-path
+  [creds bucket key path]
+  (amz.s3/put-object creds :bucket-name bucket :key key :file path))
+
+(defn delete-key
+  [creds bucket key]
+  (amz.s3/delete-object creds bucket key))
 
 (defmacro with-cached-s3
   [& forms]
