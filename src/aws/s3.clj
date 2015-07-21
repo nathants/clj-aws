@@ -1,4 +1,5 @@
 (ns aws.s3
+  (:import com.amazonaws.services.s3.model.DeleteObjectsRequest$KeyVersion)
   (:require [amazonica.aws.s3 :as amz.s3]
             [byte-transforms :as bt]
             [clojure.java.io :as io]
@@ -82,15 +83,15 @@
   [a b]
   (not= (-strip-slash a) (-strip-slash b)))
 
-(defn list
-  [creds bucket prefix & {:keys [recursive fetch-exactly max-keys keys-only]}]
+(defn list-all
+  [creds bucket prefix & {:keys [recursive fetch-exactly max-keys keys-only dirs-only]}]
   (let [delimiter (if-not recursive "/")
         prefix (if prefix (-> prefix -strip-slash (str (or delimiter ""))))
         max-keys (or fetch-exactly max-keys 1000)]
     ((fn f [m]
        (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker m :delimiter delimiter :max-keys max-keys)]
          (lazy-cat (if-not keys-only (:common-prefixes resp))
-                   (->> resp :object-summaries (map :key) (filter #(-stripped-not= prefix %)))
+                   (if-not dirs-only (->> resp :object-summaries (map :key) (filter #(-stripped-not= prefix %))))
                    (if (and (:truncated? resp) (not fetch-exactly))
                      (f (:next-marker resp))))))
      nil)))
@@ -134,6 +135,10 @@
 (defn delete-key
   [creds bucket key]
   (amz.s3/delete-object creds bucket key))
+
+(defn delete-keys
+  [creds bucket keys]
+  (amz.s3/delete-objects creds :bucket-name bucket :keys (mapv #(DeleteObjectsRequest$KeyVersion. %) keys)))
 
 (defmacro with-cached-s3
   [& forms]
