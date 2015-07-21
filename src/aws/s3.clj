@@ -1,152 +1,167 @@
 (ns aws.s3
   (:import com.amazonaws.services.s3.model.DeleteObjectsRequest$KeyVersion)
   (:require [amazonica.aws.s3 :as amz.s3]
+            [clojure.java.shell :as sh]
             [byte-transforms :as bt]
             [clojure.java.io :as io]
             [clojure.string :as s]))
 
-(def -get-root-path
-  (memoize
-   #(doto (str (System/getProperty "user.home") "/tmp/s3cache")
-      (-> java.io.File. .getParentFile .mkdirs))))
+(defn -cache-dir
+  "Create the temp directory in $HOME for cache files, mkdir it, and return the path."
+  []
+  (doto (str (System/getProperty "user.home") "/tmp")
+    (-> java.io.File. .mkdirs)))
 
 (defn -cache-path
-  [& args]
-  (str (-get-root-path) (bt/hash (apply str args))))
+  "Returns the path to use for a cache file based on a hash of the flags provided."
+  [& flags]
+  (str (-cache-dir) "/s3cache_" (bt/hash (apply str flags))))
 
 (defn -cached-get-key-stream
-  [lookup-key]
+  "Creates a disk cached get-key-stream fn."
+  [get-key-stream]
   (fn [creds bucket key]
     (let [path (-cache-path bucket key)]
       (when-not (-> path java.io.File. .exists)
-        (with-open [stream (lookup-key creds bucket key)
+        (with-open [stream (get-key-stream creds bucket key)
                     reader (io/reader stream)]
           (->> reader line-seq (s/join "\n") (spit path))))
       (io/reader path))))
 
 (defn -cached-list-keys
+  "Creates a disk cached list-keys fn.
+   Please note, this eagerly lists all keys in the bucket."
+  ;; TODO make this a lazy-seq, which caches only as many keys as are consumed by the caller.
   [list-keys]
-  (fn f
-    ([creds bucket prefix] (f creds bucket prefix [:key] nil))
-    ([creds bucket prefix keys & [marker]]
-     (let [path (-cache-path bucket prefix)]
-       (when-not (-> path java.io.File. .exists)
-         ;; todo this is eagerly reading all keys.
-         ;; we should wrap the lazy seq and only cache the keys the caller actually consumes.
-         (spit path (s/join "\n" (list-keys creds bucket prefix keys marker))))
-       (-> path slurp (s/split #"\n"))))))
+  (fn [creds bucket prefix]
+    (let [path (-cache-path bucket prefix)]
+      (when-not (-> path java.io.File. .exists)
+        (spit path (s/join "\n" (list-keys creds bucket prefix))))
+      (-> path slurp (s/split #"\n")))))
 
 (defn -prefixes
+  "For a given key, find all the prefixes that would return that key."
   [key]
   (as-> key $
-        (remove s/blank? (s/split $ #"/"))
+        (s/split $ #"/")
         (butlast $)
-        (for [i (range (count $))]
-          (take (inc i) $))
-        (map #(apply str "/" (interpose "/" %)) $)
-        (map #(s/replace % #"^/" "") $)))
+        (map #(take % $) (->> $ count range (map inc)))
+        (map #(apply str (interpose "/" %)) $)))
 
 (defn -indexed-keys
+  "Create a mapping of prefix->keys for every prefix of every key provided."
   [keys]
-  (loop [acc {}
-         keys keys]
-    (if (empty? keys)
-      acc
-      (let [key (first keys)
-            append-key (fn [ks]
-                         (conj (or ks []) key))
-            f (fn [acc prefix]
-                (update-in acc [prefix] append-key))
-            result (reduce f acc (-prefixes key))]
-        (recur result (rest keys))))))
+  (let [conj-key (fn [key acc prefix]
+                   (update-in acc [prefix] #(conj (or % []) key)))
+        build-index (fn [acc key]
+                      (reduce (partial conj-key key) acc (-prefixes key)))]
+    (reduce build-index {} keys)))
 
 (defn -stub-s3
-  [data]
-  (->> (for [[bucket vals] data]
-         (concat
-          (for [[prefix ks] (-> vals keys -indexed-keys)]
-            (let [path (-cache-path bucket prefix)]
-              (spit path (s/join "\n" ks))
-              path))
-          (for [[key text] vals]
-            (let [path (-cache-path bucket key)]
-              (spit path text)
-              path))))
-       (apply concat)
-       vec))
-
-(defn -strip-slash
-  [x]
-  (s/replace x #"/$" ""))
-
-(defn -stripped-not=
-  [a b]
-  (not= (-strip-slash a) (-strip-slash b)))
+  "Take data, a mapping of {bucket {key str}}, and create cache files for
+   for list-keys and get-key-stream as if this str content really existed, and had
+   already been fetched and cached. Returns the paths of the cache files created."
+  [bucket->data]
+  (let [stub-keys (fn [bucket keys->contents]
+                    (for [[prefix ks] (-> keys->contents keys -indexed-keys)]
+                      (let [path (-cache-path bucket prefix)]
+                        (spit path (s/join "\n" ks))
+                        path)))
+        stub-contents (fn [bucket keys->contents]
+                        (for [[key content] keys->contents]
+                          (let [path (-cache-path bucket key)]
+                            (spit path content)
+                            path)))
+        stub-buckets (fn [[bucket keys->contents]]
+                       (concat
+                        (stub-keys bucket keys->contents)
+                        (stub-contents bucket keys->contents)))]
+    (->> (map stub-buckets bucket->data)
+         (apply concat)
+         vec)))
 
 (defn list-all
-  [creds bucket prefix & {:keys [recursive fetch-exactly max-keys keys-only dirs-only]}]
+  "Returns a lazy-seq of keys and/or prefixes for a given bucket and prefix.
+   :recursive true -  works the way you are used with the filesystem.
+   :fetch-exactly true -  limits the results to a fixed number of results.
+   :keys-only true - return only keys
+   :prefixes-only true - return only prefixes
+   "
+  [creds bucket prefix & {:keys [recursive fetch-exactly keys-only prefixes-only marker] :as flags}]
   (let [delimiter (if-not recursive "/")
-        prefix (if prefix (-> prefix -strip-slash (str (or delimiter ""))))
-        max-keys (or fetch-exactly max-keys 1000)]
-    ((fn f [m]
-       (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker m :delimiter delimiter :max-keys max-keys)]
-         (lazy-cat (if-not keys-only (:common-prefixes resp))
-                   (if-not dirs-only (->> resp :object-summaries (map :key) (filter #(-stripped-not= prefix %))))
-                   (if (and (:truncated? resp) (not fetch-exactly))
-                     (f (:next-marker resp))))))
-     nil)))
+        prefix (if prefix (-> prefix (s/replace #"/$" "") (str (or delimiter ""))))
+        max-keys (or fetch-exactly 1000)]
+    (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker :delimiter delimiter :max-keys max-keys)]
+      (lazy-cat (if-not keys-only (:common-prefixes resp))
+                (if-not prefixes-only (->> resp :object-summaries (map :key)))
+                (if (and (:truncated? resp) (not fetch-exactly))
+                  (apply list-all creds bucket prefix (apply concat (assoc flags :marker (:next-marker resp)))))))))
 
 (defn list-keys
-  ([creds bucket prefix] (list-keys creds bucket prefix [:key] nil))
-  ([creds bucket prefix keys & [marker]]
+  "Returns a lazy-seq of keys for the given bucket and prefix."
+  ([creds bucket prefix & [marker]]
    (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker)]
      (lazy-cat
-      (map (if (-> keys count (> 1))
-             #(select-keys % keys)
-             (first keys))
-           (:object-summaries resp))
+      (map :key (:object-summaries resp))
       (if (:truncated? resp)
-        (list-keys creds bucket prefix keys (:next-marker resp)))))))
+        (list-keys creds bucket prefix (:next-marker resp)))))))
 
 (defn get-key-stream
+  "Get key as InputStream"
   [creds bucket key]
   (:input-stream (amz.s3/get-object creds bucket key)))
 
-(defn get-key-text
+(defn get-key-str
+  "Get key as str."
   [creds bucket key]
   (slurp (get-key-stream creds bucket key)))
 
 (defn get-key-path
+  "Download key to path."
   [creds bucket key path]
   (-> (get-key-stream creds bucket key)
       (io/copy (io/file path))))
 
-(defn put-key-text
-  [creds bucket key text]
-  (let [bytes (.getBytes text "UTF-8")
+(defn put-key-str
+  "Upload str to key."
+  [creds bucket key str]
+  (let [bytes (.getBytes str "UTF-8")
         stream (java.io.ByteArrayInputStream. bytes)
         metadata {:content-length (count bytes)}]
     (amz.s3/put-object creds :bucket-name bucket :key key :input-stream stream :metadata metadata)))
 
 (defn put-key-path
+  "Upload the file at path to key."
   [creds bucket key path]
   (amz.s3/put-object creds :bucket-name bucket :key key :file path))
 
 (defn delete-key
+  "Delete key."
   [creds bucket key]
   (amz.s3/delete-object creds bucket key))
 
 (defn delete-keys
+  "Delete multiple keys in a single request."
   [creds bucket keys]
-  (amz.s3/delete-objects creds :bucket-name bucket :keys (mapv #(DeleteObjectsRequest$KeyVersion. %) keys)))
+  (if (-> keys count (> 0))
+    (amz.s3/delete-objects creds :bucket-name bucket :keys (mapv #(DeleteObjectsRequest$KeyVersion. %) keys))))
 
 (defmacro with-cached-s3
+  "Within this form, all calls to list-keys and get-key-* will be cached to disk, and only hit the network the first time.
+   Please note that delete-* and put-* have no effect on this caching.
+   Please note that list-keys will eagerly consume all keys to do it's caching, see todo on that fn."
   [& forms]
   `(with-redefs [list-keys (-cached-list-keys list-keys)
                  get-key-stream (-cached-get-key-stream get-key-stream)]
      ~@forms))
 
 (defmacro with-stubbed-s3
+  "This builds on with-cached-s3 to provide a hook for caching custom data. This is useful for testing so that you
+   can stub s3 with whatever data you want. The data provided, which is a map of {bucket {key str}}, will be written
+   to disk as cache files. These cache files will be consumed by with-cached-s3 to provide results for calls to the
+   list-keys and get-key-* functions. When this form exits, it cleans up it's cache files so they don't leak.
+   Please note that delete-* and put-* have no effect on this caching.
+   Please note that requests for data which is not stubbed will fallback to existing cache and then actually hit s3."
   [data & forms]
   `(let [paths# (-stub-s3 ~data)
          res# (with-cached-s3
@@ -154,3 +169,10 @@
      (doseq [path# paths#]
        (-> path# java.io.File. .delete))
      res#))
+
+(defn clear-cache
+  "Clear the cache by deleting the directory containing all the cache files."
+  []
+  (let [path (-cache-dir)]
+    (assert (re-find #"/tmp$" path)) ;; sanity check for rm -rf, path must be SOMETHING/tmp
+    (-> (sh/sh "rm" "-rf" path) :exit (= 0) assert)))
