@@ -75,10 +75,11 @@
         stub-buckets (fn [[bucket keys->contents]]
                        (concat
                         (stub-keys bucket keys->contents)
-                        (stub-contents bucket keys->contents)))]
-    (->> (map stub-buckets bucket->data)
-         (apply concat)
-         vec)))
+                        (stub-contents bucket keys->contents)))
+        cache-files (->> (map stub-buckets bucket->data)
+                         (apply concat)
+                         vec)]
+    cache-files))
 
 (defn list-all
   "Returns a lazy-seq of keys and/or prefixes for a given bucket and prefix.
