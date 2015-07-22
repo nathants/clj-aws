@@ -33,10 +33,10 @@
    Please note, this eagerly lists all keys in the bucket."
   ;; TODO make this a lazy-seq, which caches only as many keys as are consumed by the caller.
   [list-keys]
-  (fn [creds bucket prefix]
+  (fn [creds bucket prefix & [marker]]
     (let [path (-cache-path bucket prefix)]
       (when-not (-> path java.io.File. .exists)
-        (spit path (s/join "\n" (list-keys creds bucket prefix))))
+        (spit path (s/join "\n" (list-keys creds bucket prefix marker))))
       (-> path slurp (s/split #"\n")))))
 
 (defn -prefixes
