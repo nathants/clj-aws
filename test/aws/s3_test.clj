@@ -56,9 +56,10 @@
 (defmacro with-wipe-test-keys
   [& forms]
   `(do (wipe-test-keys)
-       (let [res# (do ~@forms)]
-         (wipe-test-keys)
-         res#)))
+       (try
+         (do ~@forms)
+         (finally
+           (wipe-test-keys)))))
 
 (when (and *integration-test* creds bucket)
 
