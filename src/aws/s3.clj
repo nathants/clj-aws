@@ -6,6 +6,10 @@
             [clojure.java.io :as io]
             [clojure.string :as s]))
 
+(def *max-keys*
+  "The number of keys to fetch in a single roundtrip to aws."
+  1000)
+
 (defn -cache-dir
   "Create the temp directory in $HOME for cache files, mkdir it, and return the path."
   []
@@ -29,15 +33,30 @@
       (io/reader path))))
 
 (defn -cached-list-keys
-  "Creates a disk cached list-keys fn.
-   Please note, this eagerly lists all keys in the bucket."
-  ;; TODO make this a lazy-seq, which caches only as many keys as are consumed by the caller.
+  "Creates a lazy disk cached list-keys fn. Please note that because this is lazy,
+   the cache will only contain as many keys as the first caller consumed. "
   [list-keys]
-  (fn [creds bucket prefix & [marker]]
-    (let [path (-cache-path bucket prefix)]
-      (when-not (-> path java.io.File. .exists)
-        (spit path (s/join "\n" (list-keys creds bucket prefix marker))))
-      (-> path slurp (s/split #"\n")))))
+  (let [lazy-read-cache (fn [bucket prefix]
+                          (->> (map #(-cache-path bucket prefix %) (range))
+                               (take-while #(-> % java.io.File. .exists))
+                               (map slurp)
+                               (map #(s/split % #"\n"))
+                               (apply concat)))
+        lazy-generate-cache (fn [creds bucket prefix marker]
+                              ((fn f [vals]
+                                 (if-let [[i ks] (first vals)]
+                                   (let [path (-cache-path bucket prefix i)]
+                                     (spit path (s/join "\n" ks))
+                                     (lazy-cat ks (f (rest vals))))))
+                               (->> (list-keys creds bucket prefix marker)
+                                    (partition-all *max-keys*)
+                                    (map vector (range)))))
+        has-cache (fn [bucket prefix]
+                    (-> (-cache-path bucket prefix 0) java.io.File. .exists))]
+    (fn [creds bucket prefix & [marker]]
+      (if (has-cache bucket prefix)
+        (lazy-read-cache bucket prefix)
+        (lazy-generate-cache creds bucket prefix marker)))))
 
 (defn -prefixes
   "For a given key, find all the prefixes that would return that key."
@@ -63,10 +82,12 @@
    already been fetched and cached. Returns the paths of the cache files created."
   [bucket->data]
   (let [stub-keys (fn [bucket keys->contents]
-                    (for [[prefix ks] (-> keys->contents keys -indexed-keys)]
-                      (let [path (-cache-path bucket prefix)]
-                        (spit path (s/join "\n" ks))
-                        path)))
+                    (flatten
+                     (for [[prefix ks] (-> keys->contents keys -indexed-keys)]
+                       (for [[i ks] (->> ks (partition-all *max-keys*) (map vector (range)))]
+                         (let [path (-cache-path bucket prefix i)]
+                           (spit path (s/join "\n" ks))
+                           path)))))
         stub-contents (fn [bucket keys->contents]
                         (for [[key content] keys->contents]
                           (let [path (-cache-path bucket key)]
@@ -91,7 +112,7 @@
   [creds bucket prefix & {:keys [recursive fetch-exactly keys-only prefixes-only marker] :as flags}]
   (let [delimiter (if-not recursive "/")
         prefix (if prefix (-> prefix (s/replace #"/$" "") (str (or delimiter ""))))
-        max-keys (or fetch-exactly 1000)]
+        max-keys (or fetch-exactly *max-keys*)]
     (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker :delimiter delimiter :max-keys max-keys)]
       (lazy-cat (if-not keys-only (:common-prefixes resp))
                 (if-not prefixes-only (->> resp :object-summaries (map :key)))
