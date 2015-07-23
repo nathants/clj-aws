@@ -1,6 +1,7 @@
 (ns aws.s3-test
   (:import com.amazonaws.services.s3.model.DeleteObjectsRequest$KeyVersion)
   (:require [clojure.test :refer :all]
+            [clojure.java.shell :as sh]
             [amazonica.aws.s3 :as amz.s3]
             [clojure.string :as s]
             [aws.s3 :as s3]))
@@ -15,31 +16,13 @@
 
 (def test-prefix "testing/cljs_aws")
 
-(deftest test-prefixes
-  (is (= ["a" "a/b" "a/b/c"]
-         (s3/-prefixes "a/b/c/d.csv"))))
-
-(deftest test-indexed-keys
-  (is (= {"a" ["a/b/c.csv"
-               "a/d.csv"]
-          "a/b" ["a/b/c.csv"]}
-         (s3/-indexed-keys ["a/b/c.csv"
-                            "a/d.csv"]))))
-
-(deftest test-with-stubbed-s3
-  (s3/clear-cache)
-  (let [bucket "a-fake-bucket"
-        key "a/fake/prefix/fake-file.csv"
-        content "fake\ncontent"
-        data {bucket {key content}}]
-    (testing "that stubbing works"
-      (s3/with-stubbed-s3 data
-        (is (= [key] (s3/list-keys nil bucket "a/fake/prefix")))
-        (is (= content (s3/get-key-str nil bucket key)))))
-    (testing "that previous stub data gets cleaned up"
-      (s3/with-stubbed-s3 {}
-        (is (thrown? Exception (s3/list-keys nil bucket "a/fake/prefix")))
-        (is (thrown? Exception (s3/get-key-str nil bucket key)))))))
+(defmacro with-clean-cache-dir
+  [& forms]
+  `(let [dir# "/tmp/s3_test_cache"]
+     (-> (sh/sh "rm" "-rf" dir#) :exit (= 0) assert)
+     (-> (sh/sh "mkdir" "-p" dir#) :exit (= 0) assert)
+     (with-redefs [s3/-cache-dir (constantly dir#)]
+       ~@forms)))
 
 (defn wipe-test-keys
     []
@@ -60,6 +43,32 @@
          (do ~@forms)
          (finally
            (wipe-test-keys)))))
+
+(deftest test-prefixes
+  (is (= ["a" "a/b" "a/b/c"]
+         (s3/-prefixes "a/b/c/d.csv"))))
+
+(deftest test-indexed-keys
+  (is (= {"a" ["a/b/c.csv"
+               "a/d.csv"]
+          "a/b" ["a/b/c.csv"]}
+         (s3/-indexed-keys ["a/b/c.csv"
+                            "a/d.csv"]))))
+
+(deftest test-with-stubbed-s3
+  (with-clean-cache-dir
+    (let [bucket "a-fake-bucket"
+          key "a/fake/prefix/fake-file.csv"
+          content "fake\ncontent"
+          data {bucket {key content}}]
+      (testing "that stubbing works"
+        (s3/with-stubbed-s3 data
+          (is (= [key] (s3/list-keys nil bucket "a/fake/prefix")))
+          (is (= content (s3/get-key-str nil bucket key)))))
+      (testing "that previous stub data gets cleaned up"
+        (s3/with-stubbed-s3 {}
+          (is (thrown? Exception (s3/list-keys nil bucket "a/fake/prefix")))
+          (is (thrown? Exception (s3/get-key-str nil bucket key))))))))
 
 (when (and *integration-test* creds test-bucket)
 
@@ -164,20 +173,20 @@
                (s3/list-all creds test-bucket test-prefix :recursive true))))))
 
   (deftest test-with-cached-s3
-    (s3/clear-cache)
-    (with-wipe-test-keys
-      (let [key (mk-key (uuid))
-            val (uuid)]
-        (s3/put-key-str creds test-bucket key val)
-        (s3/with-cached-s3
-          (testing "we get the right stuff back with the cache"
-            (is (= [key] (s3/list-keys creds test-bucket test-prefix)))
-            (is (= val (s3/get-key-str creds test-bucket key))))
-          ;; remember delete-* and put-* are completely ignorant of this caching
-          (s3/delete-key creds test-bucket key)
-          (testing "after deleting the key, we are still able to get stuff back from the cache"
-            (is (= [key] (s3/list-keys creds test-bucket test-prefix)))
-            (is (= val (s3/get-key-str creds test-bucket key)))))
-        (testing "after exiting the cached form, we discover that the key has been deleted"
-          (is (= [] (s3/list-keys creds test-bucket test-prefix)))
-          (is (thrown? Exception (s3/get-key-str creds test-bucket key))))))))
+    (with-clean-cache-dir
+      (with-wipe-test-keys
+        (let [key (mk-key (uuid))
+              val (uuid)]
+          (s3/put-key-str creds test-bucket key val)
+          (s3/with-cached-s3
+            (testing "we get the right stuff back with the cache"
+              (is (= [key] (s3/list-keys creds test-bucket test-prefix)))
+              (is (= val (s3/get-key-str creds test-bucket key))))
+            ;; remember delete-* and put-* are completely ignorant of this caching
+            (s3/delete-key creds test-bucket key)
+            (testing "after deleting the key, we are still able to get stuff back from the cache"
+              (is (= [key] (s3/list-keys creds test-bucket test-prefix)))
+              (is (= val (s3/get-key-str creds test-bucket key)))))
+          (testing "after exiting the cached form, we discover that the key has been deleted"
+            (is (= [] (s3/list-keys creds test-bucket test-prefix)))
+            (is (thrown? Exception (s3/get-key-str creds test-bucket key)))))))))

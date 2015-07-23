@@ -1,7 +1,6 @@
 (ns aws.s3
   (:import com.amazonaws.services.s3.model.DeleteObjectsRequest$KeyVersion)
   (:require [amazonica.aws.s3 :as amz.s3]
-            [clojure.java.shell :as sh]
             [byte-transforms :as bt]
             [clojure.java.io :as io]
             [clojure.string :as s]))
@@ -191,10 +190,3 @@
      (doseq [path# paths#]
        (-> path# java.io.File. .delete))
      res#))
-
-(defn clear-cache
-  "Clear the cache by deleting the directory containing all the cache files."
-  []
-  (let [path (-cache-dir)]
-    (assert (re-find #"/tmp$" path)) ;; sanity check for rm -rf, path must be SOMETHING/tmp
-    (-> (sh/sh "rm" "-rf" path) :exit (= 0) assert)))
