@@ -1,7 +1,6 @@
 (ns aws.s3
   (:import com.amazonaws.services.s3.model.DeleteObjectsRequest$KeyVersion)
   (:require [amazonica.aws.s3 :as amz.s3]
-            [byte-transforms :as bt]
             [clojure.java.io :as io]
             [clojure.string :as s]))
 
@@ -18,7 +17,7 @@
 (defn -cache-path
   "Returns the path to use for a cache file based on a hash of the flags provided."
   [& flags]
-  (str (-cache-dir) "/s3cache_" (bt/hash (apply str flags))))
+  (str (-cache-dir) "/s3cache_" (clojure.lang.Murmur3/hashUnencodedChars (apply str flags))))
 
 (defn -cached-get-key-stream
   "Creates a disk cached get-key-stream fn."
