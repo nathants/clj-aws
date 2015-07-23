@@ -141,8 +141,8 @@
 (defn get-key-path
   "Download key to path."
   [creds bucket key path]
-  (-> (get-key-stream creds bucket key)
-      (io/copy (io/file path))))
+  (with-open [r (get-key-stream creds bucket key)]
+    (io/copy r (io/file path))))
 
 (defn put-key-str
   "Upload str to key."
