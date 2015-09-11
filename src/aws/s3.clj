@@ -110,21 +110,22 @@
   [creds bucket prefix & {:keys [recursive fetch-exactly keys-only prefixes-only marker] :as flags}]
   (let [delimiter (if-not recursive "/")
         prefix (if prefix (-> prefix (s/replace #"/$" "") (str (or delimiter ""))))
-        max-keys (or fetch-exactly *max-keys*)]
-    (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker :delimiter delimiter :max-keys max-keys)]
-      (lazy-cat (if-not keys-only (:common-prefixes resp))
-                (if-not prefixes-only (->> resp :object-summaries (map :key)))
-                (if (and (:truncated? resp) (not fetch-exactly))
-                  (apply list-all creds bucket prefix (apply concat (assoc flags :marker (:next-marker resp)))))))))
+        max-keys (or fetch-exactly *max-keys*)
+        resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker :delimiter delimiter :max-keys max-keys)
+        results (concat (if-not keys-only (:common-prefixes resp))
+                        (if-not prefixes-only (->> resp :object-summaries (map :key))))]
+    (concat results
+            (if (and (:truncated? resp) (not fetch-exactly))
+              (lazy-seq (apply list-all creds bucket prefix (apply concat (assoc flags :marker (:next-marker resp)))))))))
 
 (defn list-keys
   "Returns a lazy-seq of keys for the given bucket and prefix."
   ([creds bucket prefix & [marker]]
-   (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker)]
-     (lazy-cat
-      (map :key (:object-summaries resp))
-      (if (:truncated? resp)
-        (list-keys creds bucket prefix (:next-marker resp)))))))
+   (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker)
+         results (map :key (:object-summaries resp))]
+     (concat results
+             (if (:truncated? resp)
+               (lazy-seq (list-keys creds bucket prefix (:next-marker resp))))))))
 
 (defn get-key-stream
   "Get key as InputStream"
