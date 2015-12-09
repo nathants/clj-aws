@@ -36,10 +36,11 @@
   [list-keys]
   (let [lazy-read-cache (fn [bucket prefix]
                           (->> (map #(-cache-path bucket prefix %) (range))
-                               (take-while #(-> % java.io.File. .exists))
-                               (map slurp)
-                               (map #(s/split % #"\n"))
-                               (apply concat)))
+                            (take-while #(-> % java.io.File. .exists))
+                            (map slurp)
+                            (map #(s/split % #"\n"))
+                            (apply concat)
+                            sort))
         lazy-generate-cache (fn [creds bucket prefix marker]
                               ((fn f [vals]
                                  (if-let [[i ks] (first vals)]
@@ -47,8 +48,8 @@
                                      (spit path (s/join "\n" ks))
                                      (lazy-cat ks (f (rest vals))))))
                                (->> (list-keys creds bucket prefix marker)
-                                    (partition-all *max-keys*)
-                                    (map vector (range)))))
+                                 (partition-all *max-keys*)
+                                 (map vector (range)))))
         has-cache (fn [bucket prefix]
                     (-> (-cache-path bucket prefix 0) java.io.File. .exists))]
     (fn [creds bucket prefix & [marker]]
@@ -60,10 +61,10 @@
   "For a given key, find all the prefixes that would return that key."
   [key]
   (as-> key $
-        (s/split $ #"/")
-        (butlast $)
-        (map #(take % $) (->> $ count range (map inc)))
-        (map #(apply str (interpose "/" %)) $)))
+    (s/split $ #"/")
+    (butlast $)
+    (map #(take % $) (->> $ count range (map inc)))
+    (map #(apply str (interpose "/" %)) $)))
 
 (defn -indexed-keys
   "Create a mapping of prefix->keys for every prefix of every key provided."
@@ -78,13 +79,13 @@
   "Take data, a mapping of {bucket {key str}}, and create cache files for
    for list-keys and get-key-stream as if this str content really existed, and had
    already been fetched and cached. Returns the paths of the cache files created."
-  [bucket->data]
+  [data]
   (let [stub-keys (fn [bucket keys->contents]
                     (flatten
                      (for [[prefix ks] (-> keys->contents keys -indexed-keys)]
                        (for [[i ks] (->> ks (partition-all *max-keys*) (map vector (range)))]
                          (let [path (-cache-path bucket prefix i)]
-                           (spit path (s/join "\n" ks))
+                           (spit path (str (s/join "\n" ks) "\n") :append true)
                            path)))))
         stub-contents (fn [bucket keys->contents]
                         (for [[key content] keys->contents]
@@ -95,9 +96,9 @@
                        (concat
                         (stub-keys bucket keys->contents)
                         (stub-contents bucket keys->contents)))
-        cache-files (->> (map stub-buckets bucket->data)
-                         (apply concat)
-                         vec)]
+        cache-files (->> (map stub-buckets data)
+                      (apply concat)
+                      vec)]
     cache-files))
 
 (defn list-all
@@ -176,6 +177,20 @@
                  get-key-stream (-cached-get-key-stream get-key-stream)]
      ~@forms))
 
+(defmacro with-stubbed-puts
+  [& forms]
+  `(with-redefs [put-key-str #(do %1 (-stub-s3 {%2 {%3 %4}}))
+                 put-key-path #(do %1 (-stub-s3 {%2 {%3 (slurp %4)}}))]
+     ~@forms))
+
+(defmacro with-clean-cache-dir
+  [& forms]
+  `(let [dir# "/tmp/s3_test_cache"]
+     (-> (sh/sh "rm" "-rf" dir#) :exit (= 0) assert)
+     (-> (sh/sh "mkdir" "-p" dir#) :exit (= 0) assert)
+     (with-redefs [s3/-cache-dir (constantly dir#)]
+       ~@forms)))
+
 (defmacro with-stubbed-s3
   "This builds on with-cached-s3 to provide a hook for caching custom data. This is useful for testing so that you
    can stub s3 with whatever data you want. The data provided, which is a map of {bucket {key str}}, will be written
@@ -184,9 +199,8 @@
    Please note that delete-* and put-* have no effect on this caching.
    Please note that requests for data which is not stubbed will fallback to existing cache and then actually hit s3."
   [data & forms]
-  `(let [paths# (-stub-s3 ~data)
-         res# (with-cached-s3
-                ~@forms)]
-     (doseq [path# paths#]
-       (-> path# java.io.File. .delete))
-     res#))
+  `(with-clean-cache-dir
+     (with-stubbed-puts
+       (with-cached-s3
+         (-stub-s3 ~data)
+         ~@forms))))
