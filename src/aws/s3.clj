@@ -1,7 +1,9 @@
 (ns aws.s3
   (:import com.amazonaws.services.s3.model.DeleteObjectsRequest$KeyVersion)
   (:require [amazonica.aws.s3 :as amz.s3]
-            [clojure.java.io :as io]
+            [clojure.java
+             [shell :as sh]
+             [io :as io]]
             [clojure.string :as s]))
 
 (def *max-keys*
