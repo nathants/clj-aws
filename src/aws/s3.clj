@@ -123,12 +123,12 @@
 
 (defn list-keys
   "Returns a lazy-seq of keys for the given bucket and prefix."
-  ([creds bucket prefix & [marker]]
-   (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker)
-         results (map :key (:object-summaries resp))]
-     (concat results
-             (if (:truncated? resp)
-               (lazy-seq (list-keys creds bucket prefix (:next-marker resp))))))))
+  [creds bucket prefix & [marker]]
+  (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker)
+        results (map :key (:object-summaries resp))]
+    (concat results
+            (if (:truncated? resp)
+              (lazy-seq (list-keys creds bucket prefix (:next-marker resp)))))))
 
 (defn get-key-stream
   "Get key as InputStream"
