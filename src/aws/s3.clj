@@ -19,7 +19,12 @@
 (defn -cache-path
   "Returns the path to use for a cache file based on a hash of the flags provided."
   [& flags]
-  (str (-cache-dir) "/s3cache_" (clojure.lang.Murmur3/hashUnencodedChars (apply str flags))))
+  (->> [0]
+    (when (not (number? (last flags))))
+    (concat flags)
+    (apply str)
+    clojure.lang.Murmur3/hashUnencodedChars
+    (str (-cache-dir) "/s3cache_")))
 
 (defn -cached-get-key-stream
   "Creates a disk cached get-key-stream fn."
@@ -36,11 +41,17 @@
   "Creates a lazy disk cached list-keys fn. Please note that because this is lazy,
    the cache will only contain as many keys as the first caller consumed. "
   [list-keys]
-  (let [lazy-read-cache (fn [bucket prefix]
-                          (->> (map #(-cache-path bucket prefix %) (range))
-                            (take-while #(-> % java.io.File. .exists))
-                            (map slurp)
-                            (map #(s/split % #"\n"))
+  (let [versions (fn [prefix]
+                   [(s/replace prefix #"/$" "")
+                    (str (s/replace prefix #"/$" "") "/")])
+        lazy-read-cache (fn [bucket prefix]
+                          (->> (versions prefix)
+                            (map (fn [p]
+                                   (->> (map #(-cache-path bucket p %) (range))
+                                     (take-while #(-> % java.io.File. .exists))
+                                     (map slurp)
+                                     (map #(s/split % #"\n"))
+                                     (apply concat))))
                             (apply concat)
                             sort))
         lazy-generate-cache (fn [creds bucket prefix marker]
@@ -53,7 +64,9 @@
                                  (partition-all *max-keys*)
                                  (map vector (range)))))
         has-cache (fn [bucket prefix]
-                    (-> (-cache-path bucket prefix 0) java.io.File. .exists))]
+                    (->> (versions prefix)
+                      (map #(-> (-cache-path bucket %) java.io.File. .exists))
+                      (some identity)))]
     (fn [creds bucket prefix & [marker]]
       (if (has-cache bucket prefix)
         (lazy-read-cache bucket prefix)
@@ -82,26 +95,14 @@
    for list-keys and get-key-stream as if this str content really existed, and had
    already been fetched and cached. Returns the paths of the cache files created."
   [data]
-  (let [stub-keys (fn [bucket keys->contents]
-                    (flatten
-                     (for [[prefix ks] (-> keys->contents keys -indexed-keys)]
-                       (for [[i ks] (->> ks (partition-all *max-keys*) (map vector (range)))]
-                         (let [path (-cache-path bucket prefix i)]
-                           (spit path (str (s/join "\n" ks) "\n") :append true)
-                           path)))))
-        stub-contents (fn [bucket keys->contents]
-                        (for [[key content] keys->contents]
-                          (let [path (-cache-path bucket key)]
-                            (spit path content)
-                            path)))
-        stub-buckets (fn [[bucket keys->contents]]
-                       (concat
-                        (stub-keys bucket keys->contents)
-                        (stub-contents bucket keys->contents)))
-        cache-files (->> (map stub-buckets data)
-                      (apply concat)
-                      vec)]
-    cache-files))
+  (doseq [[bucket keys->contents] data]
+    ;; stub all possible prefixes for all keys
+    (doseq [[prefix ks] (-> keys->contents keys -indexed-keys)]
+      (doseq [[i ks] (->> ks (partition-all *max-keys*) (map vector (range)))]
+        (spit (-cache-path bucket prefix i) (str (s/join "\n" ks) "\n") :append true)))
+    ;; stub keys contents
+    (doseq [[key content] keys->contents]
+      (spit (-cache-path bucket key) content))))
 
 (defn list-all
   "Returns a lazy-seq of keys and/or prefixes for a given bucket and prefix.

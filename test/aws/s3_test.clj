@@ -57,7 +57,9 @@
                       key2 content}}]
     (testing "reads work"
       (s3/with-stubbed-s3 data
-        (is (= [key1 key2] (s3/list-keys nil bucket "a/fake/prefix")))
+        (testing "that 'prefix' and 'prefix/' are synonymous"
+          (is (= [key1 key2] (s3/list-keys nil bucket "a/fake/prefix")))
+          (is (= [key1 key2] (s3/list-keys nil bucket "a/fake/prefix/"))))
         (is (= content (s3/get-key-str nil bucket key1)))
         (is (= content (s3/get-key-str nil bucket key2)))))
     (testing "writes work"
