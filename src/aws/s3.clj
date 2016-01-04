@@ -6,6 +6,9 @@
              [io :as io]]
             [clojure.string :as s]))
 
+;; TODO stubbed-s3 should redef amazonica.* to assert false
+;; TODO make creds implicit, same source as aws cli
+
 (def *max-keys*
   "The number of keys to fetch in a single roundtrip to aws."
   1000)
@@ -31,10 +34,10 @@
 (defn -cached-get-key-stream
   "Creates a disk cached get-key-stream fn."
   [get-key-stream]
-  (fn [creds bucket k]
-    (let [path (-cache-path bucket k)]
+  (fn [creds bucket key]
+    (let [path (-cache-path bucket key)]
       (when-not (-> path java.io.File. .exists)
-        (with-open [stream (get-key-stream creds bucket k)
+        (with-open [stream (get-key-stream creds bucket key)
                     reader (io/reader stream)]
           (->> reader line-seq (s/join "\n") (spit path))))
       (io/reader path))))
@@ -68,8 +71,8 @@
 
 (defn -prefixes
   "For a given key, find all the prefixes that would return that key."
-  [k]
-  (as-> k $
+  [key]
+  (as-> key $
     (s/split $ #"/")
     (butlast $)
     (map #(take % $) (->> $ count range (map inc)))
@@ -78,10 +81,10 @@
 (defn -indexed-keys
   "Create a mapping of prefix->keys for every prefix of every key provided."
   [ks]
-  (let [conj-key (fn [k acc prefix]
-                   (update-in acc [prefix] #(conj (or % []) k)))
-        build-index (fn [acc k]
-                      (reduce (partial conj-key k) acc (-prefixes k)))]
+  (let [conj-key (fn [key acc prefix]
+                   (update-in acc [prefix] #(conj (or % []) key)))
+        build-index (fn [acc key]
+                      (reduce (partial conj-key key) acc (-prefixes key)))]
     (reduce build-index {} ks)))
 
 (defn -stub-s3
@@ -95,8 +98,8 @@
       (doseq [[i ks] (->> ks (partition-all *max-keys*) (map vector (range)))]
         (spit (-cache-path bucket prefix i) (str (s/join "\n" ks) "\n") :append true)))
     ;; stub keys contents
-    (doseq [[k content] keys->contents]
-      (spit (-cache-path bucket k) content))))
+    (doseq [[key content] keys->contents]
+      (spit (-cache-path bucket key) content))))
 
 (defn list-all
   "Returns a lazy-seq of keys and/or prefixes for a given bucket and prefix.
@@ -127,37 +130,37 @@
 
 (defn get-key-stream
   "Get key as InputStream"
-  [creds bucket k]
-  (:input-stream (amz.s3/get-object creds bucket k)))
+  [creds bucket key]
+  (:input-stream (amz.s3/get-object creds bucket key)))
 
 (defn get-key-str
-  "Get k as str."
-  [creds bucket k]
-  (slurp (get-key-stream creds bucket k)))
+  "Get key as str."
+  [creds bucket key]
+  (slurp (get-key-stream creds bucket key)))
 
 (defn get-key-path
-  "Download k to path."
-  [creds bucket k path]
-  (with-open [r (get-key-stream creds bucket k)]
+  "Download key to path."
+  [creds bucket key path]
+  (with-open [r (get-key-stream creds bucket key)]
     (io/copy r (io/file path))))
 
 (defn put-key-str
   "Upload str to key."
-  [creds bucket k str]
+  [creds bucket key str]
   (let [bytes (.getBytes str "UTF-8")
         stream (java.io.ByteArrayInputStream. bytes)
         metadata {:content-length (count bytes)}]
-    (amz.s3/put-object creds :bucket-name bucket :key k :input-stream stream :metadata metadata)))
+    (amz.s3/put-object creds :bucket-name bucket :key key :input-stream stream :metadata metadata)))
 
 (defn put-key-path
   "Upload the file at path to key."
-  [creds bucket k path]
-  (amz.s3/put-object creds :bucket-name bucket :key k :file path))
+  [creds bucket key path]
+  (amz.s3/put-object creds :bucket-name bucket :key key :file path))
 
 (defn delete-key
   "Delete key."
-  [creds bucket k]
-  (amz.s3/delete-object creds bucket k))
+  [creds bucket key]
+  (amz.s3/delete-object creds bucket key))
 
 (defn delete-keys
   "Delete multiple keys in a single request."
