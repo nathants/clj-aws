@@ -76,7 +76,8 @@
     (s/split $ #"/")
     (butlast $)
     (map #(take % $) (->> $ count range (map inc)))
-    (map #(apply str (interpose "/" %)) $)))
+    (map #(apply str (interpose "/" %)) $)
+    (cons "" $)))
 
 (defn -indexed-keys
   "Create a mapping of prefix->keys for every prefix of every key provided."

@@ -37,15 +37,20 @@
            (wipe-test-keys)))))
 
 (deftest test-prefixes
-  (is (= ["a" "a/b" "a/b/c"]
+  (is (= ["" "a" "a/b" "a/b/c"]
          (s3/-prefixes "a/b/c/d.csv"))))
 
 (deftest test-indexed-keys
-  (is (= {"a" ["a/b/c.csv"
+  (is (= {"" ["a/b/c.csv"
+              "a/d.csv"
+              "e/f.csv"]
+          "a" ["a/b/c.csv"
                "a/d.csv"]
-          "a/b" ["a/b/c.csv"]}
+          "a/b" ["a/b/c.csv"]
+          "e" ["e/f.csv"]}
          (s3/-indexed-keys ["a/b/c.csv"
-                            "a/d.csv"]))))
+                            "a/d.csv"
+                            "e/f.csv"]))))
 
 (deftest test-with-stubbed-s3
   (let [bucket "a-fake-bucket"
