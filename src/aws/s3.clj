@@ -180,7 +180,17 @@
 (defmacro with-stubbed-puts
   [& forms]
   `(with-redefs [put-key-str #(do %1 (-stub-s3 {%2 {%3 %4}}))
-                 put-key-path #(do %1 (-stub-s3 {%2 {%3 (slurp %4)}}))]
+                 put-key-path #(do %1 (-stub-s3 {%2 {%3 (slurp %4)}}))
+                 amz.s3/list-objects ~(fn [_ _ bucket _ prefix & _]
+                                        (assert false (str "you tried to list-keys, but you haven't stubbed anything for: s3://" bucket "/" prefix)))
+                 amz.s3/get-object ~(fn [_ bucket key]
+                                      (assert false (str "you tried to get-key, but you haven't stubbed anything for: s3://" bucket "/" key)))
+                 amz.s3/put-object ~(fn [& _]
+                                      (assert false "put-object should never be called while stubbed"))
+                 amz.s3/delete-object ~(fn [& _]
+                                         (assert false "delete-object should never be called while stubbed"))
+                 amz.s3/delete-objects ~(fn [& _]
+                                          (assert false "delete-objects should never be called while stubbed"))]
      ~@forms))
 
 (defmacro with-clean-cache-dir
