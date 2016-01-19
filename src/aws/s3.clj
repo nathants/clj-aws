@@ -21,15 +21,14 @@
 
 (defn -cache-path
   "Returns the path to use for a cache file based on a hash of the flags provided."
-  [& flags]
-  (->> [0]
-    (when (not (number? (last flags))))
-    (concat flags)
-    (map str)
-    (map #(s/replace % #"/$" ""))
-    (apply str)
-    clojure.lang.Murmur3/hashUnencodedChars
-    (str (-cache-dir) "/s3cache_")))
+  [& args]
+  (as-> args $
+    ;; the number as the last arg is a part of list-keys pagination
+    (concat $ (when (not (number? (last args))) [0]))
+    ;; drop trailing slashes, so lookups for directories, "foo/" and "foo" are synonamous
+    (map #(if (string? %) (s/replace % #"/$" "") %) $)
+    (hash $)
+    (str (-cache-dir) "/s3cache_" $)))
 
 (defn -cached-get-key-stream
   "Creates a disk cached get-key-stream fn."

@@ -75,8 +75,8 @@
         (is (= content (s3/get-key-str nil bucket key0)))))
     (testing "that previous stub data gets cleaned up"
       (s3/with-stubbed-s3 {}
-        (is (thrown? Exception (s3/list-keys nil bucket "a/fake/prefix")))
-        (is (thrown? Exception (s3/get-key-str nil bucket key)))))))
+        (is (thrown? Error (s3/list-keys nil bucket "a/fake/prefix")))
+        (is (thrown? Error (s3/get-key-str nil bucket key0)))))))
 
 (when (and *integration-test* creds test-bucket)
 
