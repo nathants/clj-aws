@@ -195,11 +195,12 @@
 
 (defmacro with-clean-cache-dir
   [& forms]
-  `(let [dir# "/tmp/s3_test_cache"]
-     (-> (sh/sh "rm" "-rf" dir#) :exit (= 0) assert)
-     (-> (sh/sh "mkdir" "-p" dir#) :exit (= 0) assert)
-     (with-redefs [s3/-cache-dir (constantly dir#)]
-       ~@forms)))
+  `(let [dir# (.trim (:out (sh/sh "mktemp" "--directory")))]
+     (try
+       (with-redefs [s3/-cache-dir (constantly dir#)]
+         ~@forms)
+       (finally
+         (-> (sh/sh "rm" "-rf" dir#) :exit (= 0) assert)))))
 
 (defmacro with-stubbed-s3
   "This builds on with-cached-s3 to provide a hook for caching custom data. This is useful for testing so that you
