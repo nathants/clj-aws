@@ -9,12 +9,12 @@
 (def *integration-test* false)
 
 (def creds
-  {:access-key (System/getenv "AWS_ACCESS_KEY")
+  {:access-key (System/getenv "AWS_ACCESS_KEY_ID")
    :secret-key (System/getenv "AWS_SECRET_ACCESS_KEY")})
 
 (def test-bucket (System/getenv "S3_TEST_BUCKET"))
 
-(def test-prefix "testing/cljs_aws")
+(def test-prefix "testing/clj-aws")
 
 (defn wipe-test-keys
   []
@@ -95,10 +95,10 @@
     (str (java.util.UUID/randomUUID)))
 
   (deftest test-mk-key
-    (is (= "testing/cljs_aws/123"  (mk-key "/123")))
-    (is (= "testing/cljs_aws/123"  (mk-key "123")))
-    (is (= "testing/cljs_aws/123"  (mk-key "123")))
-    (is (= "testing/cljs_aws/123"  (mk-key "/123"))))
+    (is (= "testing/clj-aws/123"  (mk-key "/123")))
+    (is (= "testing/clj-aws/123"  (mk-key "123")))
+    (is (= "testing/clj-aws/123"  (mk-key "123")))
+    (is (= "testing/clj-aws/123"  (mk-key "/123"))))
 
   (deftest test-put-get-text
     (with-wipe-test-keys
@@ -148,10 +148,10 @@
              "dir1/b.txt"
              "c.txt"
              "dir2/dir3.txt"])
-      (is (= ["testing/cljs_aws/a.txt"
-              "testing/cljs_aws/c.txt"
-              "testing/cljs_aws/dir1/b.txt"
-              "testing/cljs_aws/dir2/dir3.txt"]
+      (is (= ["testing/clj-aws/a.txt"
+              "testing/clj-aws/c.txt"
+              "testing/clj-aws/dir1/b.txt"
+              "testing/clj-aws/dir2/dir3.txt"]
              (s3/list-keys creds test-bucket test-prefix)))))
 
   (deftest test-list-all
