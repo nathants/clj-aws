@@ -7,7 +7,6 @@
             [clojure.string :as s]))
 
 ;; TODO stubbed-s3 should redef amazonica.* to assert false
-;; TODO make creds implicit, same source as aws cli
 
 (def *max-keys*
   "The number of keys to fetch in a single roundtrip to aws."
@@ -33,10 +32,10 @@
 (defn -cached-get-key-stream
   "Creates a disk cached get-key-stream fn."
   [get-key-stream]
-  (fn [creds bucket key]
+  (fn [bucket key]
     (let [path (-cache-path bucket key)]
       (when-not (-> path java.io.File. .exists)
-        (with-open [stream (get-key-stream creds bucket key)
+        (with-open [stream (get-key-stream bucket key)
                     reader (io/reader stream)]
           (->> reader line-seq (s/join "\n") (spit path))))
       (io/reader path))))
@@ -52,21 +51,21 @@
                             (map #(s/split % #"\n"))
                             (apply concat)
                             sort))
-        lazy-generate-cache (fn [creds bucket prefix marker]
+        lazy-generate-cache (fn [bucket prefix marker]
                               ((fn f [vals]
                                  (if-let [[i ks] (first vals)]
                                    (let [path (-cache-path bucket prefix i)]
                                      (spit path (s/join "\n" ks))
                                      (lazy-cat ks (f (rest vals))))))
-                               (->> (list-keys creds bucket prefix marker)
+                               (->> (list-keys bucket prefix marker)
                                  (partition-all *max-keys*)
                                  (map vector (range)))))
         has-cache (fn [bucket prefix]
                     (-> (-cache-path bucket prefix) java.io.File. .exists))]
-    (fn [creds bucket prefix & [marker]]
+    (fn [bucket prefix & [marker]]
       (if (has-cache bucket prefix)
         (lazy-read-cache bucket prefix)
-        (lazy-generate-cache creds bucket prefix marker)))))
+        (lazy-generate-cache bucket prefix marker)))))
 
 (defn -prefixes
   "For a given key, find all the prefixes that would return that key."
@@ -108,65 +107,65 @@
    :keys-only true - return only keys
    :prefixes-only true - return only prefixes
    "
-  [creds bucket prefix & {:keys [recursive fetch-exactly keys-only prefixes-only marker] :as flags}]
+  [bucket prefix & {:keys [recursive fetch-exactly keys-only prefixes-only marker] :as flags}]
   (let [delimiter (if-not recursive "/")
         prefix (if prefix (-> prefix (s/replace #"/$" "") (str (or delimiter ""))))
         max-keys (or fetch-exactly *max-keys*)
-        resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker :delimiter delimiter :max-keys max-keys)
+        resp (amz.s3/list-objects :bucket-name bucket :prefix prefix :marker marker :delimiter delimiter :max-keys max-keys)
         results (concat (if-not keys-only (:common-prefixes resp))
                         (if-not prefixes-only (->> resp :object-summaries (map :key))))]
     (concat results
             (if (and (:truncated? resp) (not fetch-exactly))
-              (lazy-seq (apply list-all creds bucket prefix (apply concat (assoc flags :marker (:next-marker resp)))))))))
+              (lazy-seq (apply list-all bucket prefix (apply concat (assoc flags :marker (:next-marker resp)))))))))
 
 (defn list-keys
   "Returns a lazy-seq of keys for the given bucket and prefix."
-  [creds bucket prefix & [marker]]
-  (let [resp (amz.s3/list-objects creds :bucket-name bucket :prefix prefix :marker marker)
+  [bucket prefix & [marker]]
+  (let [resp (amz.s3/list-objects :bucket-name bucket :prefix prefix :marker marker)
         results (map :key (:object-summaries resp))]
     (concat results
             (if (:truncated? resp)
-              (lazy-seq (list-keys creds bucket prefix (:next-marker resp)))))))
+              (lazy-seq (list-keys bucket prefix (:next-marker resp)))))))
 
 (defn get-key-stream
   "Get key as InputStream"
-  [creds bucket key]
-  (:input-stream (amz.s3/get-object creds bucket key)))
+  [bucket key]
+  (:input-stream (amz.s3/get-object bucket key)))
 
 (defn get-key-str
   "Get key as str."
-  [creds bucket key]
-  (slurp (get-key-stream creds bucket key)))
+  [bucket key]
+  (slurp (get-key-stream bucket key)))
 
 (defn get-key-path
   "Download key to path."
-  [creds bucket key path]
-  (with-open [r (get-key-stream creds bucket key)]
+  [bucket key path]
+  (with-open [r (get-key-stream bucket key)]
     (io/copy r (io/file path))))
 
 (defn put-key-str
   "Upload str to key."
-  [creds bucket key str]
+  [bucket key str]
   (let [bytes (.getBytes str "UTF-8")
         stream (java.io.ByteArrayInputStream. bytes)
         metadata {:content-length (count bytes)}]
-    (amz.s3/put-object creds :bucket-name bucket :key key :input-stream stream :metadata metadata)))
+    (amz.s3/put-object :bucket-name bucket :key key :input-stream stream :metadata metadata)))
 
 (defn put-key-path
   "Upload the file at path to key."
-  [creds bucket key path]
-  (amz.s3/put-object creds :bucket-name bucket :key key :file path))
+  [bucket key path]
+  (amz.s3/put-object :bucket-name bucket :key key :file path))
 
 (defn delete-key
   "Delete key."
-  [creds bucket key]
-  (amz.s3/delete-object creds bucket key))
+  [bucket key]
+  (amz.s3/delete-object bucket key))
 
 (defn delete-keys
   "Delete multiple keys in a single request."
-  [creds bucket ks]
+  [bucket ks]
   (if (-> ks count (> 0))
-    (amz.s3/delete-objects creds :bucket-name bucket :keys (mapv #(DeleteObjectsRequest$KeyVersion. %) ks))))
+    (amz.s3/delete-objects :bucket-name bucket :keys (mapv #(DeleteObjectsRequest$KeyVersion. %) ks))))
 
 (defmacro with-cached-s3
   "Within this form, all calls to list-keys and get-key-* will be cached to disk, and only hit the network the first time.
@@ -179,11 +178,11 @@
 
 (defmacro with-stubbed-puts
   [& forms]
-  `(with-redefs [put-key-str #(do %1 (-stub-s3 {%2 {%3 %4}}))
-                 put-key-path #(do %1 (-stub-s3 {%2 {%3 (slurp %4)}}))
-                 amz.s3/list-objects ~(fn [_ _ bucket _ prefix & _]
+  `(with-redefs [put-key-str  #(-stub-s3 {%1 {%2 %3}})
+                 put-key-path #(-stub-s3 {%1 {%2 (slurp %3)}})
+                 amz.s3/list-objects ~(fn [_ bucket _ prefix & _]
                                         (assert false (str "you tried to list-keys, but you haven't stubbed anything for: s3://" bucket "/" prefix)))
-                 amz.s3/get-object ~(fn [_ bucket key]
+                 amz.s3/get-object ~(fn [bucket key]
                                       (assert false (str "you tried to get-key, but you haven't stubbed anything for: s3://" bucket "/" key)))
                  amz.s3/put-object ~(fn [& _]
                                       (assert false "put-object should never be called while stubbed"))

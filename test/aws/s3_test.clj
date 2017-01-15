@@ -8,10 +8,6 @@
 
 (def *integration-test* false)
 
-(def creds
-  {:access-key (System/getenv "AWS_ACCESS_KEY_ID")
-   :secret-key (System/getenv "AWS_SECRET_ACCESS_KEY")})
-
 (def test-bucket (System/getenv "S3_TEST_BUCKET"))
 
 (def test-prefix "testing/clj-aws")
@@ -19,14 +15,14 @@
 (defn wipe-test-keys
   []
   (as-> {:bucket-name test-bucket :prefix test-prefix :max-keys 1000000} $
-    (amz.s3/list-objects creds $)
+    (amz.s3/list-objects $)
     (:object-summaries $)
     (map :key $)
     (doto $
       (->> (mapv #(println "deleting test s3 key:" %))))
     (if (-> $ count (> 1))
-      (amz.s3/delete-objects creds :bucket-name test-bucket :keys (mapv #(DeleteObjectsRequest$KeyVersion. %) $))
-      (mapv #(amz.s3/delete-object creds test-bucket %) $))))
+      (amz.s3/delete-objects :bucket-name test-bucket :keys (mapv #(DeleteObjectsRequest$KeyVersion. %) $))
+      (mapv #(amz.s3/delete-object test-bucket %) $))))
 
 (defmacro with-wipe-test-keys
   [& forms]
@@ -63,22 +59,22 @@
     (testing "reads work"
       (s3/with-stubbed-s3 data
         (testing "that 'prefix' and 'prefix/' are synonymous"
-          (is (= [key1 key2] (s3/list-keys nil bucket "a/fake/prefix")))
-          (is (= [key1 key2] (s3/list-keys nil bucket "a/fake/prefix/"))))
-        (is (= content (s3/get-key-str nil bucket key1)))
-        (is (= content (s3/get-key-str nil bucket key2)))))
+          (is (= [key1 key2] (s3/list-keys bucket "a/fake/prefix")))
+          (is (= [key1 key2] (s3/list-keys bucket "a/fake/prefix/"))))
+        (is (= content (s3/get-key-str bucket key1)))
+        (is (= content (s3/get-key-str bucket key2)))))
     (testing "writes work"
       (s3/with-stubbed-s3 data
-        (is (= 2 (count (s3/list-keys nil bucket "a/fake/prefix"))))
-        (s3/put-key-str nil bucket key0 content)
-        (is (= [key0 key1 key2] (s3/list-keys nil bucket "a/fake/prefix")))
-        (is (= content (s3/get-key-str nil bucket key0)))))
+        (is (= 2 (count (s3/list-keys bucket "a/fake/prefix"))))
+        (s3/put-key-str bucket key0 content)
+        (is (= [key0 key1 key2] (s3/list-keys bucket "a/fake/prefix")))
+        (is (= content (s3/get-key-str bucket key0)))))
     (testing "that previous stub data gets cleaned up"
       (s3/with-stubbed-s3 {}
-        (is (thrown? Error (s3/list-keys nil bucket "a/fake/prefix")))
-        (is (thrown? Error (s3/get-key-str nil bucket key0)))))))
+        (is (thrown? Error (s3/list-keys bucket "a/fake/prefix")))
+        (is (thrown? Error (s3/get-key-str bucket key0)))))))
 
-(when (and *integration-test* creds test-bucket)
+(when (and *integration-test* test-bucket)
 
   (defn mk-key
     [key]
@@ -104,8 +100,8 @@
     (with-wipe-test-keys
       (let [key (mk-key (uuid))
             val (uuid)]
-        (s3/put-key-str creds test-bucket key val)
-        (is (= val (s3/get-key-str creds test-bucket key))))))
+        (s3/put-key-str test-bucket key val)
+        (is (= val (s3/get-key-str test-bucket key))))))
 
   (deftest test-put-get-path
     (with-wipe-test-keys
@@ -113,37 +109,37 @@
             val (uuid)
             path (temp-path)]
         (spit path val)
-        (s3/put-key-path creds test-bucket key path)
-        (is (= val (s3/get-key-str creds test-bucket key))))))
+        (s3/put-key-path test-bucket key path)
+        (is (= val (s3/get-key-str test-bucket key))))))
 
   (deftest test-delete-key
     (with-wipe-test-keys
       (let [key (mk-key "foo")]
-        (s3/put-key-str creds test-bucket key "")
-        (s3/delete-key creds test-bucket key)
-        (is (thrown? Exception (s3/get-key-str creds test-bucket key))))))
+        (s3/put-key-str test-bucket key "")
+        (s3/delete-key test-bucket key)
+        (is (thrown? Exception (s3/get-key-str test-bucket key))))))
 
   (deftest test-delete-keys
     (with-wipe-test-keys
       (testing "delete with more than 1 key"
         (let [key1 (mk-key "foo1")
               key2 (mk-key "foo2")]
-          (s3/put-key-str creds test-bucket key1 "")
-          (s3/put-key-str creds test-bucket key2 "")
-          (s3/delete-keys creds test-bucket [key1 key2])
-          (is (thrown? Exception (s3/get-key-str creds test-bucket key1)))
-          (is (thrown? Exception (s3/get-key-str creds test-bucket key2)))))
+          (s3/put-key-str test-bucket key1 "")
+          (s3/put-key-str test-bucket key2 "")
+          (s3/delete-keys test-bucket [key1 key2])
+          (is (thrown? Exception (s3/get-key-str test-bucket key1)))
+          (is (thrown? Exception (s3/get-key-str test-bucket key2)))))
       (testing "delete with 1 key"
         (let [key1 (mk-key "foo1")]
-          (s3/put-key-str creds test-bucket key1 "")
-          (s3/delete-keys creds test-bucket [key1])
-          (is (thrown? Exception (s3/get-key-str creds test-bucket key1)))))
+          (s3/put-key-str test-bucket key1 "")
+          (s3/delete-keys test-bucket [key1])
+          (is (thrown? Exception (s3/get-key-str test-bucket key1)))))
       (testing "delete with 0 keys"
-        (is (= nil (s3/delete-keys creds test-bucket []))))))
+        (is (= nil (s3/delete-keys test-bucket []))))))
 
   (deftest test-list-keys
     (with-wipe-test-keys
-      (mapv #(s3/put-key-str creds test-bucket (mk-key %) "")
+      (mapv #(s3/put-key-str test-bucket (mk-key %) "")
             ["a.txt"
              "dir1/b.txt"
              "c.txt"
@@ -152,49 +148,49 @@
               "testing/clj-aws/c.txt"
               "testing/clj-aws/dir1/b.txt"
               "testing/clj-aws/dir2/dir3.txt"]
-             (s3/list-keys creds test-bucket test-prefix)))))
+             (s3/list-keys test-bucket test-prefix)))))
 
   (deftest test-list-all
     (with-wipe-test-keys
-      (mapv #(s3/put-key-str creds test-bucket (mk-key %) "")
+      (mapv #(s3/put-key-str test-bucket (mk-key %) "")
             ["a.txt"
              "dir1/b.txt"])
       (testing "that we can fetch a specific number of keys"
-        (is (= 1 (count (s3/list-all creds test-bucket test-prefix :fetch-exactly 1)))))
+        (is (= 1 (count (s3/list-all test-bucket test-prefix :fetch-exactly 1)))))
       (testing "normal list shows the contents of the test-prefix directory's keys and dirs"
         (is (= (->> ["dir1/"
                      "a.txt"]
                  (mapv mk-key))
-               (s3/list-all creds test-bucket test-prefix))))
+               (s3/list-all test-bucket test-prefix))))
       (testing "list :prefixes-only shows the contents of the test-prefix directory's prefixes"
         (is (= (->> ["dir1/"]
                  (mapv mk-key))
-               (s3/list-all creds test-bucket test-prefix :prefixes-only true))))
+               (s3/list-all test-bucket test-prefix :prefixes-only true))))
       (testing "list :keys-only shows the contents of the test-prefix directory's keys"
         (is (= (->> ["a.txt"]
                  (mapv mk-key))
-               (s3/list-all creds test-bucket test-prefix :keys-only true))))
+               (s3/list-all test-bucket test-prefix :keys-only true))))
       (testing "list :recursive shows all keys for the current test-prefix including sub prefixes"
         (is (= (->> ["a.txt"
                      "dir1/b.txt"]
                  (mapv mk-key))
-               (s3/list-all creds test-bucket test-prefix :recursive true))))))
+               (s3/list-all test-bucket test-prefix :recursive true))))))
 
   (deftest test-with-cached-s3
     (s3/with-clean-cache-dir
       (with-wipe-test-keys
         (let [key (mk-key (uuid))
               val (uuid)]
-          (s3/put-key-str creds test-bucket key val)
+          (s3/put-key-str test-bucket key val)
           (s3/with-cached-s3
             (testing "we get the right stuff back with the cache"
-              (is (= [key] (s3/list-keys creds test-bucket test-prefix)))
-              (is (= val (s3/get-key-str creds test-bucket key))))
+              (is (= [key] (s3/list-keys test-bucket test-prefix)))
+              (is (= val (s3/get-key-str test-bucket key))))
             ;; remember delete-* is completely ignorant of this caching
-            (s3/delete-key creds test-bucket key)
+            (s3/delete-key test-bucket key)
             (testing "after deleting the key, we are still able to get stuff back from the cache"
-              (is (= [key] (s3/list-keys creds test-bucket test-prefix)))
-              (is (= val (s3/get-key-str creds test-bucket key)))))
+              (is (= [key] (s3/list-keys test-bucket test-prefix)))
+              (is (= val (s3/get-key-str test-bucket key)))))
           (testing "after exiting the cached form, we discover that the key has been deleted"
-            (is (= [] (s3/list-keys creds test-bucket test-prefix)))
-            (is (thrown? Exception (s3/get-key-str creds test-bucket key)))))))))
+            (is (= [] (s3/list-keys test-bucket test-prefix)))
+            (is (thrown? Exception (s3/get-key-str test-bucket key)))))))))
