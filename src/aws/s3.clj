@@ -40,8 +40,12 @@
       (when-not (-> path java.io.File. .exists)
         (with-open [stream (get-key-stream bucket key)
                     reader (io/reader stream)]
-          (->> reader line-seq (s/join "\n") (spit path))))
+          (io/copy reader (io/file path))))
       (io/reader path))))
+
+(defn -cached-get-key-path [bucket key path]
+  (Files/copy (Paths/get (URI. (str "file://" (-cache-path bucket key))))
+              (FileOutputStream. path)))
 
 (defn -cached-list-keys
   "Creates a lazy disk cached list-keys fn. Please note that because this is lazy,
@@ -179,7 +183,8 @@
    Please note that list-keys will eagerly consume all keys to do it's caching, see todo on that fn."
   [& forms]
   `(with-redefs [list-keys (-cached-list-keys list-keys)
-                 get-key-stream (-cached-get-key-stream get-key-stream)]
+                 get-key-stream (-cached-get-key-stream get-key-stream)
+                 get-key-path -cached-get-key-path]
      ~@forms))
 
 (defmacro with-stubbed-puts
@@ -202,7 +207,7 @@
   [& forms]
   `(let [dir# (.trim (:out (sh/sh "mktemp" "--directory")))]
      (try
-       (with-redefs [s3/-cache-dir (constantly dir#)]
+       (with-redefs [aws.s3/-cache-dir (constantly dir#)]
          ~@forms)
        (finally
          (-> (sh/sh "rm" "-rf" dir#) :exit (= 0) assert)))))
