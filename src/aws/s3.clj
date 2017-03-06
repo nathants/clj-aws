@@ -1,10 +1,13 @@
 (ns aws.s3
-  (:import com.amazonaws.services.s3.model.DeleteObjectsRequest$KeyVersion)
   (:require [amazonica.aws.s3 :as amz.s3]
             [clojure.java
-             [shell :as sh]
-             [io :as io]]
-            [clojure.string :as s]))
+             [io :as io]
+             [shell :as sh]]
+            [clojure.string :as s])
+  (:import com.amazonaws.services.s3.model.DeleteObjectsRequest$KeyVersion
+           java.io.FileOutputStream
+           java.net.URI
+           [java.nio.file Files Paths]))
 
 ;; TODO stubbed-s3 should redef amazonica.* to assert false
 
@@ -97,8 +100,11 @@
       (doseq [[i ks] (->> ks (partition-all *max-keys*) (map vector (range)))]
         (spit (-cache-path bucket prefix i) (str (s/join "\n" ks) "\n") :append true)))
     ;; stub keys contents
-    (doseq [[key content] keys->contents]
-      (spit (-cache-path bucket key) content))))
+    (doseq [[key content] keys->contents
+            :let [path (-cache-path bucket key)]]
+      (if (vector? content)
+        (Files/copy (Paths/get (URI. (str "file://" (first content)))) (FileOutputStream. path))
+        (spit path content)))))
 
 (defn list-all
   "Returns a lazy-seq of keys and/or prefixes for a given bucket and prefix.
@@ -179,7 +185,7 @@
 (defmacro with-stubbed-puts
   [& forms]
   `(with-redefs [put-key-str  #(-stub-s3 {%1 {%2 %3}})
-                 put-key-path #(-stub-s3 {%1 {%2 (slurp %3)}})
+                 put-key-path #(-stub-s3 {%1 {%2 [%3]}})
                  amz.s3/list-objects ~(fn [_ bucket _ prefix & _]
                                         (assert false (str "you tried to list-keys, but you haven't stubbed anything for: s3://" bucket "/" prefix)))
                  amz.s3/get-object ~(fn [bucket key]
