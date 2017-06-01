@@ -11,7 +11,7 @@
 
 ;; TODO stubbed-s3 should redef amazonica.* to assert false
 
-(def *max-keys*
+(def ^:dynamic *max-keys*
   "The number of keys to fetch in a single roundtrip to aws."
   1000)
 
